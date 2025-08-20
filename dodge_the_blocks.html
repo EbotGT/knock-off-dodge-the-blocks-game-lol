@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Dodge the Blocks</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0b0f1a;
+      color: #e6e6e6;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+      touch-action: none;
+    }
+    #ui {
+      position: fixed;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      pointer-events: none;
+    }
+    #hud {
+      position: fixed;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-weight: 600;
+      text-shadow: 0 1px 3px rgba(0,0,0,.5);
+      pointer-events: none;
+    }
+    .chip {
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      padding: 8px 12px;
+      backdrop-filter: blur(6px);
+    }
+    #buttons {
+      position: fixed;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      pointer-events: auto;
+    }
+    button {
+      pointer-events: auto;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      border-radius: 12px;
+      padding: 10px 14px;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: .3px;
+      backdrop-filter: blur(6px);
+      cursor: pointer;
+      transition: transform .1s ease, background .2s ease;
+    }
+    button:active { transform: scale(0.98); }
+    #overlay {
+      pointer-events: auto;
+      text-align: center;
+      max-width: 680px;
+      padding: 24px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 44px);
+      letter-spacing: .5px;
+    }
+    p { opacity: .9; line-height: 1.4; }
+    #small {
+      opacity: .8;
+      font-size: 14px;
+    }
+    #canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    #settings {
+      position: fixed;
+      top: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      pointer-events: auto;
+    }
+    input[type="range"]{
+      width: 160px;
+    }
+    @media (max-width: 640px) {
+      #settings { top: auto; bottom: 64px; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <div class="chip" id="scoreChip">Score: 0</div>
+    <div class="chip" id="highChip">Best: 0</div>
+    <div class="chip" id="stateChip">Ready</div>
+  </div>
+
+  <div id="settings" class="chip">
+    <label for="difficulty">Difficulty</label>
+    <input id="difficulty" type="range" min="0" max="100" value="35" />
+    <span id="diffLabel">Normal</span>
+    <button id="soundBtn" aria-label="Toggle sound">🔊</button>
+    <button id="pauseBtn" aria-label="Pause/Resume (P)">⏸</button>
+    <button id="restartBtn" aria-label="Restart (R)">🔁</button>
+  </div>
+
+  <div id="ui">
+    <div id="overlay" class="chip">
+      <h1>🟦 Dodge the Blocks</h1>
+      <p>Move your player to avoid falling blocks. Survive as long as you can to boost your score.<br>
+      Use <b>← →</b> or <b>A D</b>, drag with your finger, or use an attached gamepad.<br><br>
+      Power‑ups: <b>Shield</b> (1 hit), <b>Slow‑mo</b> (time warp).</p>
+      <p id="small">Tap, click, or press <b>Space</b> to start. Press <b>P</b> to pause.</p>
+      <div style="margin-top:16px;">
+        <button id="startBtn">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="buttons">
+    <button id="leftBtn">◀︎</button>
+    <button id="rightBtn">▶︎</button>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  let DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  let W = 0, H = 0;
+
+  const scoreChip = document.getElementById('scoreChip');
+  const highChip = document.getElementById('highChip');
+  const stateChip = document.getElementById('stateChip');
+  const overlay = document.getElementById('overlay');
+  const ui = document.getElementById('ui');
+  const startBtn = document.getElementById('startBtn');
+  const leftBtn = document.getElementById('leftBtn');
+  const rightBtn = document.getElementById('rightBtn');
+  const diffSlider = document.getElementById('difficulty');
+  const diffLabel = document.getElementById('diffLabel');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const soundBtn = document.getElementById('soundBtn');
+
+  function resize(){
+    W = Math.floor(window.innerWidth * DPR);
+    H = Math.floor(window.innerHeight * DPR);
+    canvas.width = W; canvas.height = H;
+    canvas.style.width = (W / DPR) + 'px';
+    canvas.style.height = (H / DPR) + 'px';
+  }
+  window.addEventListener('resize', () => { DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1)); resize(); });
+  resize();
+
+  // --- Audio (simple beeps)
+  let audioAllowed = true;
+  let audioCtx = null;
+  function beep(freq=440, dur=0.08, type='sine', vol=0.05){
+    if(!audioAllowed) return;
+    try {
+      if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type;
+      o.frequency.value = freq;
+      g.gain.value = vol;
+      o.connect(g).connect(audioCtx.destination);
+      o.start();
+      o.stop(audioCtx.currentTime + dur);
+    } catch(e){/* ignore */}
+  }
+  soundBtn.addEventListener('click', () => {
+    audioAllowed = !audioAllowed;
+    soundBtn.textContent = audioAllowed ? '🔊' : '🔇';
+    if(audioAllowed) beep(880, .06, 'triangle', 0.03);
+  });
+
+  // --- Game state
+  const State = { READY:0, RUNNING:1, PAUSED:2, OVER:3 };
+  let gameState = State.READY;
+
+  // High score
+  const HS_KEY = 'DTB_HIGH_SCORE_V1';
+  let best = Number(localStorage.getItem(HS_KEY) || 0);
+  highChip.textContent = 'Best: ' + best;
+
+  // Difficulty mapping (spawn rate and speed multiplier)
+  function difficultyFromValue(v){
+    const t = v/100; // 0..1
+    // label
+    let label = 'Normal';
+    if(t < 0.15) label = 'Chill';
+    else if(t < 0.35) label = 'Easy';
+    else if(t < 0.55) label = 'Normal';
+    else if(t < 0.75) label = 'Hard';
+    else label = 'Insane';
+    // parameters
+    const spawnEvery = 550 - 450*t; // ms
+    const speedMul = 1 + 1.75*t;
+    return {label, spawnEvery, speedMul};
+  }
+  let diff = difficultyFromValue(+diffSlider.value);
+  diffLabel.textContent = diff.label;
+  diffSlider.addEventListener('input', () => {
+    diff = difficultyFromValue(+diffSlider.value);
+    diffLabel.textContent = diff.label;
+  });
+
+  // Player
+  const player = {
+    x: 0, y: 0, w: 36, h: 36, vx: 0,
+    speed: 0.6,
+    shield: 0,
+    color: '#58a6ff'
+  };
+
+  // Runtime arrays
+  let blocks = [];
+  let powerups = [];
+  let score = 0;
+  let lastSpawn = 0;
+  let rng = Math.random;
+
+  function reset(){
+    player.w = Math.max(24, Math.min(40, Math.floor(Math.min(W,H)/30)));
+    player.h = player.w;
+    player.x = (W - player.w)/2;
+    player.y = H - player.h - 20*DPR;
+    player.vx = 0;
+    player.shield = 0;
+
+    blocks = [];
+    powerups = [];
+    score = 0;
+    lastSpawn = 0;
+    slowmo.t = 0;
+    slowmo.active = false;
+    stateChip.textContent = 'Ready';
+  }
+
+  // Input
+  const keys = new Set();
+  window.addEventListener('keydown', e => {
+    if(['ArrowLeft','ArrowRight','a','d','A','D'].includes(e.key)) e.preventDefault();
+    if(e.key === 'p' || e.key === 'P'){ togglePause(); }
+    else if(e.code === 'Space'){
+      if(gameState === State.READY || gameState === State.OVER){ start(); }
+      else togglePause();
+    } else if(e.key === 'r' || e.key === 'R'){ hardRestart(); }
+    keys.add(e.key);
+  }, {passive:false});
+  window.addEventListener('keyup', e => keys.delete(e.key));
+
+  // Touch / pointer drag
+  let dragging = false;
+  function pointerX(evt){
+    if(evt.touches && evt.touches[0]) return evt.touches[0].clientX * DPR;
+    if(evt.changedTouches && evt.changedTouches[0]) return evt.changedTouches[0].clientX * DPR;
+    return (evt.clientX||0) * DPR;
+  }
+  canvas.addEventListener('pointerdown', (e)=>{ dragging=true; e.preventDefault();});
+  canvas.addEventListener('pointerup', ()=> dragging=false);
+  canvas.addEventListener('pointermove', (e)=>{
+    if(dragging){
+      const x = pointerX(e);
+      // Move player center toward pointer
+      player.x = Math.max(0, Math.min(W - player.w, x - player.w/2));
+    }
+  });
+  // On-screen buttons
+  function setBtnHold(btn, dir){
+    let down = false, raf;
+    const step = (t)=>{
+      if(!down) return;
+      player.x += dir * player.speed * 16;
+      player.x = Math.max(0, Math.min(W - player.w, player.x));
+      raf = requestAnimationFrame(step);
+    };
+    btn.addEventListener('pointerdown', ()=>{down=true; step();});
+    btn.addEventListener('pointerup', ()=>{down=false; cancelAnimationFrame(raf);});
+    btn.addEventListener('pointerleave', ()=>{down=false; cancelAnimationFrame(raf);});
+  }
+  setBtnHold(leftBtn, -1);
+  setBtnHold(rightBtn, +1);
+
+  // Gamepad
+  let gpIndex = null;
+  window.addEventListener('gamepadconnected', (e)=>{ gpIndex = e.gamepad.index; });
+  window.addEventListener('gamepaddisconnected', ()=>{ gpIndex = null; });
+
+  // Power-ups
+  const PU_TYPES = { SHIELD: 'shield', SLOWMO: 'slowmo' };
+  function spawnPowerUp(x, y){
+    const type = (rng() < 0.5) ? PU_TYPES.SHIELD : PU_TYPES.SLOWMO;
+    powerups.push({
+      x, y, w: 22*DPR, h: 22*DPR, vy: 0.1 + 0.1*rng(), type, life: 9000
+    });
+  }
+  const slowmo = { active:false, t:0 };
+
+  // Blocks
+  function spawnBlock(){
+    const base = Math.max(18*DPR, Math.min(70*DPR, W/20));
+    const w = base + rng()*base*1.4;
+    const h = base*0.8 + rng()*base*0.7;
+    const x = rng()*(W - w);
+    const speed = (0.18 + rng()*0.22) * diff.speedMul * (1 + score/60000);
+    const hue = 210 + Math.floor(rng()*90);
+    blocks.push({x, y: -h-2, w, h, vy: speed, hue, spin:(rng()*2-1)*0.002});
+    // Rare chance to attach a powerup to a block (drops when it exits screen)
+    if(rng() < 0.11){
+      setTimeout(()=> spawnPowerUp(x + w/2, -h - 10*DPR), 1200);
+    }
+  }
+
+  // Collision (AABB)
+  function hit(a,b){
+    return !(a.x+a.w < b.x || a.x > b.x+b.w || a.y+a.h < b.y || a.y > b.y+b.h);
+  }
+
+  // Start / pause / restart
+  function start(){
+    reset();
+    gameState = State.RUNNING;
+    ui.style.display = 'none';
+    stateChip.textContent = 'Playing';
+    beep(880, .07, 'sawtooth', .03);
+  }
+  function gameOver(){
+    gameState = State.OVER;
+    stateChip.textContent = 'Game Over';
+    ui.style.display = 'grid';
+    overlay.querySelector('h1').innerText = '💥 Game Over';
+    overlay.querySelector('#small').innerHTML = 'Tap, click, or press <b>Space</b> to try again.';
+    startBtn.textContent = 'Play again';
+    if(score > best){
+      best = Math.floor(score);
+      localStorage.setItem(HS_KEY, best);
+      highChip.textContent = 'Best: ' + best;
+    }
+    beep(110, .15, 'square', .05);
+    beep(82, .25, 'square', .05);
+  }
+  function togglePause(){
+    if(gameState === State.RUNNING){
+      gameState = State.PAUSED; stateChip.textContent = 'Paused'; ui.style.display = 'grid';
+      overlay.querySelector('h1').innerText = '⏸ Paused';
+      overlay.querySelector('#small').innerHTML = 'Press <b>P</b> or <b>Space</b> to resume.';
+      startBtn.textContent = 'Resume';
+    } else if(gameState === State.PAUSED){
+      ui.style.display = 'none';
+      gameState = State.RUNNING; stateChip.textContent = 'Playing';
+      beep(660, .06, 'triangle', .03);
+    }
+  }
+  function hardRestart(){
+    reset();
+    overlay.querySelector('h1').innerText = '🟦 Dodge the Blocks';
+    overlay.querySelector('#small').innerHTML = 'Tap, click, or press <b>Space</b> to start. Press <b>P</b> to pause.';
+    startBtn.textContent = 'Start';
+    ui.style.display = 'grid';
+    gameState = State.READY;
+  }
+
+  startBtn.addEventListener('click', ()=>{
+    if(gameState === State.READY || gameState === State.OVER) start();
+    else if(gameState === State.PAUSED) togglePause();
+  });
+  pauseBtn.addEventListener('click', togglePause);
+  restartBtn.addEventListener('click', hardRestart);
+
+  // Click anywhere to start if ready
+  ui.addEventListener('click', (e)=>{
+    if(e.target.tagName.toLowerCase() === 'button') return;
+    if(gameState === State.READY || gameState === State.OVER) start();
+  });
+
+  // Main loop
+  let last = performance.now();
+  function loop(now){
+    requestAnimationFrame(loop);
+    const rawDt = Math.min(50, now - last); // clamp to handle tab switches
+    last = now;
+
+    // Gamepad read
+    if(gpIndex !== null){
+      const gp = navigator.getGamepads()[gpIndex];
+      if(gp){
+        const x = Math.abs(gp.axes[0]) > 0.1 ? gp.axes[0] : 0;
+        player.x += x * player.speed * 18;
+      }
+    }
+
+    // Update difficulty label on state chip
+    // stateChip.textContent left as game state indicator
+
+    // Clear
+    ctx.clearRect(0,0,W,H);
+
+    // Fancy background grid
+    drawGrid(now);
+
+    // UI chips already DOM
+
+    if(gameState === State.RUNNING){
+      const dt = slowmo.active ? rawDt * 0.55 : rawDt;
+      score += dt;
+      scoreChip.textContent = 'Score: ' + Math.floor(score);
+
+      // Spawn
+      lastSpawn += dt;
+      const spawnEvery = diff.spawnEvery * (slowmo.active ? 1.3 : 1.0);
+      while(lastSpawn > spawnEvery){
+        lastSpawn -= spawnEvery;
+        spawnBlock();
+      }
+
+      // Move player
+      const left = keys.has('ArrowLeft') || keys.has('a') || keys.has('A');
+      const right = keys.has('ArrowRight') || keys.has('d') || keys.has('D');
+      if(left && !right) player.vx = -player.speed;
+      else if(right && !left) player.vx = player.speed;
+      else player.vx = 0;
+      player.x += player.vx * dt * 1.5 * (slowmo.active ? 0.9 : 1);
+      player.x = Math.max(0, Math.min(W - player.w, player.x));
+
+      // Move blocks
+      for(let i=blocks.length-1;i>=0;i--){
+        const b = blocks[i];
+        b.y += b.vy * dt * (slowmo.active?0.55:1);
+        b.x += Math.sin((now + i*30)*b.spin) * 0.2 * DPR;
+        // Collision
+        if(hit(player, b)){
+          if(player.shield > 0){
+            player.shield--;
+            blocks.splice(i,1);
+            flash('#34d399');
+            beep(520, .07,'triangle', .04);
+            continue;
+          }else{
+            flash('#ef4444');
+            return gameOver();
+          }
+        }
+        if(b.y > H + 40*DPR){
+          // chance to drop a powerup when leaving screen
+          if(Math.random() < 0.07) spawnPowerUp(b.x + b.w/2, H - 120*DPR);
+          blocks.splice(i,1);
+        }
+      }
+
+      // Move powerups
+      for(let i=powerups.length-1;i>=0;i--){
+        const p = powerups[i];
+        p.y += p.vy * dt;
+        p.life -= dt;
+        if(hit(player, p)){
+          if(p.type === PU_TYPES.SHIELD){
+            player.shield = Math.min(2, player.shield + 1);
+            toast('Shield +1');
+            beep(700, .08,'sine', .05);
+          }else if(p.type === PU_TYPES.SLOWMO){
+            slowmo.active = true; slowmo.t = 4500;
+            toast('Slow‑mo!');
+            beep(380, .08,'sine', .05);
+          }
+          powerups.splice(i,1);
+          continue;
+        }
+        if(p.y > H + 40*DPR || p.life <= 0) powerups.splice(i,1);
+      }
+
+      // Slowmo timer
+      if(slowmo.active){
+        slowmo.t -= rawDt;
+        if(slowmo.t <= 0) slowmo.active = false;
+      }
+    }
+
+    // Draw entities
+    drawPlayer();
+    drawBlocks();
+    drawPowerups();
+  }
+  requestAnimationFrame(loop);
+
+  // Visual helpers
+  function drawGrid(t){
+    const s = 28*DPR;
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.strokeStyle = '#111827';
+    ctx.lineWidth = 1;
+    const ox = (t*0.02) % s;
+    const oy = (t*0.04) % s;
+    for(let x = -ox; x < W; x += s){
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    }
+    for(let y = -oy; y < H; y += s){
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawPlayer(){
+    ctx.save();
+    // subtle glow
+    ctx.shadowColor = slowmo.active ? '#a78bfa' : (player.shield>0 ? '#34d399' : '#3b82f6');
+    ctx.shadowBlur = 12*DPR;
+    ctx.fillStyle = player.color;
+    roundRect(ctx, player.x, player.y, player.w, player.h, 6*DPR);
+    ctx.fill();
+
+    // shield ring(s)
+    if(player.shield>0){
+      for(let i=0;i<player.shield;i++){
+        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(52,211,153,0.9)';
+        ctx.lineWidth = 2*DPR;
+        ctx.arc(player.x+player.w/2, player.y+player.h/2, player.w*0.75 + i*6*DPR, 0, Math.PI*2);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawBlocks(){
+    for(const b of blocks){
+      const g = ctx.createLinearGradient(b.x, b.y, b.x, b.y + b.h);
+      g.addColorStop(0, `hsl(${b.hue}, 70%, 65%)`);
+      g.addColorStop(1, `hsl(${b.hue}, 70%, 45%)`);
+      ctx.fillStyle = g;
+      roundRect(ctx, b.x, b.y, b.w, b.h, 6*DPR);
+      ctx.fill();
+    }
+  }
+
+  function drawPowerups(){
+    for(const p of powerups){
+      ctx.save();
+      if(p.type === PU_TYPES.SHIELD){
+        ctx.fillStyle = '#10b981';
+        ctx.strokeStyle = '#064e3b';
+      } else {
+        ctx.fillStyle = '#8b5cf6';
+        ctx.strokeStyle = '#4c1d95';
+      }
+      roundRect(ctx, p.x - p.w/2, p.y - p.h/2, p.w, p.h, 6*DPR);
+      ctx.fill();
+      ctx.lineWidth = 2*DPR;
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function roundRect(ctx, x,y,w,h,r){
+    const rr = Math.min(r, w/2, h/2);
+    ctx.beginPath();
+    ctx.moveTo(x+rr, y);
+    ctx.arcTo(x+w, y, x+w, y+h, rr);
+    ctx.arcTo(x+w, y+h, x, y+h, rr);
+    ctx.arcTo(x, y+h, x, y, rr);
+    ctx.arcTo(x, y, x+w, y, rr);
+    ctx.closePath();
+  }
+
+  // Flash / toast
+  let flashT = 0; let flashColor = '#fff';
+  function flash(c){
+    flashColor = c; flashT = 280;
+    const id = setInterval(()=>{
+      flashT -= 50; if(flashT<=0) clearInterval(id);
+    }, 50);
+  }
+  function toast(text){
+    stateChip.textContent = text;
+    setTimeout(()=> stateChip.textContent = (gameState===State.RUNNING?'Playing':stateChip.textContent), 1200);
+  }
+
+  // Background flash overlay
+  (function flashOverlay(){
+    requestAnimationFrame(flashOverlay);
+    if(flashT > 0){
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, Math.min(0.35, flashT/280)) * 0.8;
+      ctx.fillStyle = flashColor;
+      ctx.fillRect(0,0,W,H);
+      ctx.restore();
+    }
+  })();
+
+  // Expose for console fun
+  window.DTB = { hardRestart, togglePause, start, difficultyFromValue };
+})();
+</script>
+</body>
+</html>
